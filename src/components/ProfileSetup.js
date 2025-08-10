@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ArrowLeftCircle, ArrowRightCircle } from './Icon';
+import { ArrowLeftCircle, ArrowRightCircle } from './Icons';
 
 
 function CustomizationCanvas({ faceOptions, faceParts }) {

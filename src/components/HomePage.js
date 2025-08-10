@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { collection, addDoc, doc, getDoc, setDoc, query, where, getDocs } from 'firebase/firestore';
-import { db } from '../App'; // Assuming db is exported from your main App.js
+import { collection, addDoc, doc, getDoc,updateDoc, setDoc, query, where, getDocs } from 'firebase/firestore';
+import { db } from '../App';
 
-// --- Home Page Component ---
+
 export default function HomePage({ navigateTo, userId, userProfile, appId }) {
     const [privateRoomId, setPrivateRoomId] = useState('');
     const [rounds, setRounds] = useState(5);
@@ -24,7 +24,7 @@ export default function HomePage({ navigateTo, userId, userProfile, appId }) {
 
         try {
             const collectionPath = `artifacts/${appId}/public/data/games`;
-            const playerInitialData = { id: userId, name: userProfile.username, face: userProfile.face, score: 0, roundStatus: 'playing' };
+            const playerInitialData = { id: userId, name: userProfile.username, face: userProfile.face, score: 0, roundStatus: 'playing', lastSeen: new Date() };
             const gameData = {
                 admin: userId,
                 players: [playerInitialData],
@@ -34,13 +34,13 @@ export default function HomePage({ navigateTo, userId, userProfile, appId }) {
                 roundStartTime: null,
                 status: 'waiting',
                 createdAt: new Date(),
+                lastActivity: new Date(), // Initialize lastActivity timestamp
                 isPrivate: isPrivate,
             };
 
             if (isPrivate) {
                 let newId = '';
                 let isUnique = false;
-                // Loop to ensure the generated ID is unique
                 while (!isUnique) {
                     newId = generateRoomId();
                     const gameRef = doc(db, collectionPath, newId);
@@ -49,11 +49,9 @@ export default function HomePage({ navigateTo, userId, userProfile, appId }) {
                         isUnique = true;
                     }
                 }
-                // Create document with the custom, short ID
                 await setDoc(doc(db, collectionPath, newId), gameData);
                 navigateTo('game', newId);
             } else {
-                // Use addDoc for public games to get an auto-generated ID
                 const gameRef = await addDoc(collection(db, collectionPath), gameData);
                 navigateTo('game', gameRef.id);
             }
@@ -84,13 +82,28 @@ export default function HomePage({ navigateTo, userId, userProfile, appId }) {
             });
 
             if (openGame) {
+                const adminPlayer = openGame.players.find(p => p.id === openGame.admin);
+                const gameRef = doc(db, collectionPath, openGame.id);
+
+                if (adminPlayer && adminPlayer.lastSeen) {
+                    const inactivityDuration = Date.now() - adminPlayer.lastSeen.toMillis();
+                    // If admin is inactive for more than 3 minutes (180000 ms)
+                    if (inactivityDuration > 180000) {
+                        // Kick the old admin and promote the new player
+                        const updatedPlayers = openGame.players.filter(p => p.id !== openGame.admin);
+                        await updateDoc(gameRef, { 
+                            admin: userId,
+                            players: updatedPlayers
+                        });
+                    }
+                }
                 navigateTo('game', openGame.id);
             } else {
                 createGame(false);
             }
         } catch (error) {
             console.error("Error finding quick play game:", error);
-            createGame(false); // Create a new one if searching fails
+            createGame(false);
         } finally {
             setIsLoading(false);
         }
@@ -103,7 +116,11 @@ export default function HomePage({ navigateTo, userId, userProfile, appId }) {
     };
 
     return (
-        <div className="min-h-screen bg-gradient-to-br from-purple-200 via-indigo-200 to-blue-200 font-sans p-4 sm:p-8 flex flex-col items-center justify-center">
+        <div className="min-h-screen font-sans p-4 sm:p-8 flex flex-col items-center justify-center">
+            
+            <video autoPlay loop muted playsInline className="bg-vid">
+                <source src="/videos/bg_vid.mp4" type="video/mp4" />
+            </video>
             <div className="w-full max-w-md mx-auto bg-white/80 backdrop-blur-sm rounded-2xl shadow-2xl p-8 text-center">
                 <h1 className="text-5xl font-bold text-gray-800 mb-2" style={{ fontFamily: "'Comic Sans MS', 'Chalkduster', 'cursive'" }}>Hangman</h1>
                 <p className="text-gray-600 mb-8">Welcome, <span className="font-bold">{userProfile.username}</span>!</p>

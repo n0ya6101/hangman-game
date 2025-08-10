@@ -1,4 +1,4 @@
-import {TrophyIcon} from './Icon';
+import {  GoldMedalIcon, SilverMedalIcon, BronzeMedalIcon } from './Icons';
 
 
 export default function Podium({ players, onPlayAgain, isAdmin }) {
@@ -24,11 +24,12 @@ export default function Podium({ players, onPlayAgain, isAdmin }) {
         <div className="text-center flex flex-col items-center w-full">
             <h2 className="text-5xl font-bold mt-4 mb-6 text-white" style={{ fontFamily: "'Comic Sans MS', 'cursive'" }}>Game Over!</h2>
             <div className="flex items-end justify-center gap-2 w-full max-w-md">
-                <PodiumBlock player={thirdPlace} height="h-24" color="bg-orange-400" rank="3" />
-                <PodiumBlock player={firstPlace} height="h-48" color="bg-amber-400" icon={<TrophyIcon />} />
-                <PodiumBlock player={secondPlace} height="h-32" color="bg-slate-400" rank="2" />
+                <PodiumBlock player={thirdPlace} height="h-24" color="bg-brown-200" icon={<BronzeMedalIcon className="w-12 h-12" />} />
+                <PodiumBlock player={firstPlace} height="h-48" color="bg-amber-400" icon={<GoldMedalIcon className="w-16 h-16" />} />
+                <PodiumBlock player={secondPlace} height="h-32" color="bg-gray-200" icon={<SilverMedalIcon className="w-14 h-14" />} />
             </div>
             {isAdmin && <button onClick={onPlayAgain} className="mt-8 bg-blue-500 text-white font-bold py-3 px-8 rounded-lg text-xl shadow-lg transform hover:scale-105 transition-all">Play Again</button>}
         </div>
     );
 }
+

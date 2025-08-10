@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {  db } from '../App'; 
-import { doc, onSnapshot, updateDoc, arrayUnion, writeBatch } from 'firebase/firestore';
+import { doc, onSnapshot, updateDoc, deleteDoc, arrayUnion, writeBatch } from 'firebase/firestore';
 import HangmanCanvas from './HangmanCanvas';
 import WordDisplay from './WordDisplay';
 import Keyboard from './Keyboard'; 
 import Podium from './Podium';
-import { HomeIcon } from './Icon';
-import { CopyIcon } from './Icon'; 
+import { HomeIcon, CopyIcon,  AnimatedTimer} from './Icons';
+import wordList from './WordList';
+
+
 
 
 export default function GamePage({ navigateTo, gameId, userId, userProfile, appId }) {
@@ -14,31 +16,38 @@ export default function GamePage({ navigateTo, gameId, userId, userProfile, appI
     const [showExitModal, setShowExitModal] = useState(false);
     const [timeLeft, setTimeLeft] = useState(30);
     const [notification, setNotification] = useState('');
-    const [isEndingRound, setIsEndingRound] = useState(false);
+    const [singlePlayerStats, setSinglePlayerStats] = useState({ current: 0, max: 0 });
+    const [hint, setHint] = useState(null);
     const timerRef = useRef(null);
+    const inactivityTimerRef = useRef(null);
 
     const isSinglePlayer = gameId === 'single-player';
-    const wordList = [
-        "APPLE", "BANANA", "ORANGE", "GRAPE", "STRAWBERRY", "WATERMELON", "PINEAPPLE", "MANGO",
-        "CARROT", "BROCCOLI", "CUCUMBER", "TOMATO", "POTATO", "ONION", "GARLIC", "LETTUCE",
-        "COMPUTER", "KEYBOARD", "MONITOR", "SOFTWARE", "HARDWARE", "INTERNET", "DATABASE", "ALGORITHM",
-        "JAVASCRIPT", "PYTHON", "REACT", "ANGULAR", "VUE", "NODEJS", "HTML", "CSS",
-        "ELEPHANT", "TIGER", "LION", "GIRAFFE", "ZEBRA", "MONKEY", "KANGAROO", "PENGUIN",
-        "GUITAR", "PIANO", "DRUMS", "VIOLIN", "TRUMPET", "FLUTE", "SAXOPHONE", "HARMONICA",
-        "MOUNTAIN", "OCEAN", "RIVER", "FOREST", "DESERT", "VOLCANO", "ISLAND", "BEACH"
-    ];
+ 
     const isAdmin = !isSinglePlayer && game && game.admin === userId;
 
     const startNewSinglePlayerGame = () => {
+        setHint(null);
+        const newWordData = wordList[Math.floor(Math.random() * wordList.length)];
         setGame({
             admin: userId,
-            players: [{ id: userId, name: userProfile.username, face: userProfile.face, score: 0, roundStatus: 'playing', guesses: [], incorrectGuesses: 0 }],
-            word: wordList[Math.floor(Math.random() * wordList.length)],
+            players: [{ id: userId, name: userProfile.username, face: userProfile.face, score: 0, roundStatus: 'playing', guesses: [], incorrectGuesses: 0, hintRevealed: false }],
+            word: newWordData.word,
+            hint: newWordData.hint,
             status: 'playing',
             isSinglePlayer: true,
             playerResult: null,
         });
     };
+
+    // Load single player stats from local storage
+    useEffect(() => {
+        if (isSinglePlayer) {
+            const savedStats = localStorage.getItem('hangmanSinglePlayerStats');
+            if (savedStats) {
+                setSinglePlayerStats(JSON.parse(savedStats));
+            }
+        }
+    }, [isSinglePlayer]);
 
     useEffect(() => {
         if (isSinglePlayer) {
@@ -50,10 +59,9 @@ export default function GamePage({ navigateTo, gameId, userId, userProfile, appI
                 if (snapshot.exists()) {
                     const gameData = snapshot.data();
                     setGame(gameData);
-                    setIsEndingRound(false); // Reset on new data
                     const isPlayer = gameData.players.some(p => p.id === userId);
                     if (!isPlayer) {
-                        await updateDoc(gameRef, { players: arrayUnion({ id: userId, name: userProfile.username, face: userProfile.face, score: 0, roundStatus: 'playing', guesses: [], incorrectGuesses: 0 }) });
+                        await updateDoc(gameRef, { players: arrayUnion({ id: userId, name: userProfile.username, face: userProfile.face, score: 0, roundStatus: 'playing', guesses: [], incorrectGuesses: 0, lastSeen: new Date(), hintRevealed: false }) });
                     }
                 } else {
                     navigateTo('home');
@@ -95,33 +103,40 @@ export default function GamePage({ navigateTo, gameId, userId, userProfile, appI
 
     const startNextRound = async () => {
         if (!isAdmin) return;
-        setIsEndingRound(false); // Reset for the new round
+        setTimeLeft(30); // CORRECTED: Reset timer on client-side
+        setHint(null);
         const gameRef = getGameRef();
         const isGameOver = game.currentRound >= game.totalRounds;
         if (isGameOver) {
             await updateDoc(gameRef, { status: 'finished' });
         } else {
             const batch = writeBatch(db);
-            const randomWord = wordList[Math.floor(Math.random() * wordList.length)];
-            const playersWithResetState = game.players.map(p => ({ ...p, roundStatus: 'playing', guesses: [], incorrectGuesses: 0 }));
-            batch.update(gameRef, { word: randomWord, status: 'playing', currentRound: game.currentRound + 1, roundStartTime: new Date(), players: playersWithResetState });
+            const newWordData = wordList[Math.floor(Math.random() * wordList.length)];
+            const playersWithResetState = game.players.map(p => ({ ...p, roundStatus: 'playing', guesses: [], incorrectGuesses: 0, hintRevealed: false }));
+            batch.update(gameRef, { word: newWordData.word, hint: newWordData.hint, status: 'playing', currentRound: game.currentRound + 1, roundStartTime: new Date(), players: playersWithResetState });
             await batch.commit();
         }
     };
     
     useEffect(() => {
-        if (isSinglePlayer || !game || game.status !== 'playing' || !isAdmin || isEndingRound) return;
-        
-        const allPlayersFinished = game.players.every(p => p.roundStatus !== 'playing');
-        const timerExpired = timeLeft <= 0;
+        if (isSinglePlayer || !game || !isAdmin) return;
 
-        if (allPlayersFinished || timerExpired) {
-            setIsEndingRound(true); // Prevent multiple triggers
-            setTimeout(() => {
+        if (game.status === 'playing') {
+            const allPlayersFinished = game.players.every(p => p.roundStatus !== 'playing');
+            const timerExpired = timeLeft <= 0;
+            if (allPlayersFinished || timerExpired) {
+                updateDoc(getGameRef(), { status: 'ending' });
+            }
+        }
+
+        if (game.status === 'ending') {
+            const roundEndTimer = setTimeout(() => {
                 startNextRound();
             }, 3000);
+            return () => clearTimeout(roundEndTimer);
         }
-    }, [game, timeLeft, isAdmin, isSinglePlayer, isEndingRound]);
+    }, [game, timeLeft, isAdmin, isSinglePlayer]);
+
 
     const startGame = async () => {
         if (!isAdmin) return;
@@ -136,37 +151,85 @@ export default function GamePage({ navigateTo, gameId, userId, userProfile, appI
             if (game.status !== 'playing') return;
             const me = game.players[0];
             if (me.guesses.includes(letter)) return;
-            const newGuesses = [...me.guesses, letter];
+
+            let newGuesses = [...me.guesses, letter];
             let newIncorrectGuesses = me.incorrectGuesses;
             if (!game.word.includes(letter)) newIncorrectGuesses++;
+            
+            let hintRevealed = me.hintRevealed;
+            if (newIncorrectGuesses === 4 && !hintRevealed) {
+                setHint(game.hint);
+                hintRevealed = true;
+            }
+
             const wordIsGuessed = game.word.split('').every(l => newGuesses.includes(l));
             const isLoser = newIncorrectGuesses >= 6;
             let newStatus = game.status, playerResult = null;
-            if (wordIsGuessed) { newStatus = 'finished'; playerResult = 'won'; } 
-            else if (isLoser) { newStatus = 'finished'; playerResult = 'lost'; }
-            setGame(g => ({...g, status: newStatus, playerResult, players: [{...g.players[0], guesses: newGuesses, incorrectGuesses: newIncorrectGuesses}]}));
+
+            if (wordIsGuessed) {
+                newStatus = 'finished';
+                playerResult = 'won';
+                const newStats = { current: singlePlayerStats.current + 1, max: Math.max(singlePlayerStats.max, singlePlayerStats.current + 1) };
+                setSinglePlayerStats(newStats);
+                localStorage.setItem('hangmanSinglePlayerStats', JSON.stringify(newStats));
+            } else if (isLoser) {
+                newStatus = 'finished';
+                playerResult = 'lost';
+                const newStats = { current: 0, max: singlePlayerStats.max };
+                setSinglePlayerStats(newStats);
+                localStorage.setItem('hangmanSinglePlayerStats', JSON.stringify(newStats));
+            }
+
+            setGame(g => ({...g, status: newStatus, playerResult, players: [{...g.players[0], guesses: newGuesses, incorrectGuesses: newIncorrectGuesses, hintRevealed }]}));
         } else {
             const me = game.players.find(p => p.id === userId);
             if (!game || game.status !== 'playing' || me.roundStatus !== 'playing' || me.guesses.includes(letter)) return;
-            const newGuesses = [...me.guesses, letter];
+            
+            let newGuesses = [...me.guesses, letter];
             let newIncorrectGuesses = me.incorrectGuesses;
             if (!game.word.includes(letter)) newIncorrectGuesses++;
+
+            let hintRevealed = me.hintRevealed;
+            if (newIncorrectGuesses === 4 && !hintRevealed) {
+                setHint(game.hint);
+                hintRevealed = true;
+            }
+
             const wordIsGuessed = game.word.split('').every(l => newGuesses.includes(l));
             const isLoser = newIncorrectGuesses >= 6;
             let newRoundStatus = me.roundStatus, scoreToAdd = 0;
             if (wordIsGuessed) { newRoundStatus = 'won'; scoreToAdd = Math.max(0, (6 - newIncorrectGuesses) * 10); } 
             else if (isLoser) { newRoundStatus = 'lost'; }
-            const updatedPlayers = game.players.map(p => p.id === userId ? { ...p, guesses: newGuesses, incorrectGuesses: newIncorrectGuesses, roundStatus: newRoundStatus, score: p.score + scoreToAdd } : p);
+            
+            const updatedPlayers = game.players.map(p => p.id === userId ? { ...p, guesses: newGuesses, incorrectGuesses: newIncorrectGuesses, roundStatus: newRoundStatus, score: p.score + scoreToAdd, hintRevealed, lastSeen: new Date() } : p);
             await updateDoc(getGameRef(), { players: updatedPlayers });
         }
     };
     
     const resetGame = async () => {
         if (!isAdmin) return;
+        setHint(null);
         const gameRef = getGameRef();
-        const playersWithResetScores = game.players.map(p => ({ ...p, score: 0, roundStatus: 'playing', guesses: [], incorrectGuesses: 0 }));
-        await updateDoc(gameRef, { status: 'waiting', currentRound: 0, word: '', roundStartTime: null, players: playersWithResetScores });
+        const playersWithResetScores = game.players.map(p => ({ ...p, score: 0, roundStatus: 'playing', guesses: [], incorrectGuesses: 0, hintRevealed: false }));
+        await updateDoc(gameRef, { status: 'waiting', currentRound: 0, word: '', hint: '', roundStartTime: null, players: playersWithResetScores });
     };
+
+    // Lobby cleanup for finished games
+    useEffect(() => {
+        if (isSinglePlayer || !isAdmin) return;
+
+        if (game && game.status === 'finished') {
+            clearTimeout(inactivityTimerRef.current);
+            inactivityTimerRef.current = setTimeout(() => {
+                deleteDoc(getGameRef());
+                navigateTo('home');
+            }, 300000); // 5 minutes
+        }
+
+        return () => {
+            clearTimeout(inactivityTimerRef.current);
+        }
+    }, [game, isAdmin, isSinglePlayer]);
 
     if (!game) return <div className="flex items-center justify-center h-screen bg-slate-100"><div className="text-2xl font-bold animate-pulse">Loading Game...</div></div>;
     
@@ -174,7 +237,10 @@ export default function GamePage({ navigateTo, gameId, userId, userProfile, appI
     const sortedPlayers = isSinglePlayer ? game.players : [...game.players].sort((a, b) => b.score - a.score);
 
     return (
-        <div className="min-h-screen bg-gradient-to-b from-sky-400 to-blue-600 font-sans p-4 relative">
+        <div className="min-h-screen  font-sans p-4 flex flex-col items-center justify-center relative">
+             <video autoPlay loop muted playsInline className="bg-vid">
+                <source src="/videos/bg_vid.mp4" type="video/mp4" />
+            </video>
             {notification && <div className="absolute top-5 right-5 bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg animate-bounce">{notification}</div>}
             <button onClick={() => setShowExitModal(true)} className="absolute top-4 left-4 bg-white/70 hover:bg-white text-gray-700 p-3 rounded-full shadow-lg transition-all transform hover:scale-110"><HomeIcon /></button>
             {showExitModal && (
@@ -185,11 +251,14 @@ export default function GamePage({ navigateTo, gameId, userId, userProfile, appI
                     </div>
                 </div>
             )}
-            <div className="max-w-4xl mx-auto mt-16">
+            <div className="w-full max-w-4xl mx-auto">
                 <div className={`grid grid-cols-1 ${!isSinglePlayer && 'md:grid-cols-3'} gap-8`}>
                     {!isSinglePlayer && (
                         <div className="md:col-span-1 bg-white/60 backdrop-blur-sm rounded-2xl p-6 shadow-lg">
-                            <h2 className="text-2xl font-bold text-gray-800 mb-4" style={{fontFamily: "'Comic Sans MS', 'cursive'"}}>Round {game.currentRound} of {game.totalRounds}</h2>
+                             <div className="flex justify-between items-center mb-4">
+                                <h2 className="text-2xl font-bold text-gray-800" style={{fontFamily: "'Comic Sans MS', 'cursive'"}}>Round {game.currentRound} of {game.totalRounds}</h2>
+                                <AnimatedTimer timeLeft={timeLeft} />
+                            </div>
                             {game.isPrivate && (
                                 <div className="mb-4">
                                     <p className="font-semibold text-gray-700">Room ID:</p>
@@ -205,8 +274,7 @@ export default function GamePage({ navigateTo, gameId, userId, userProfile, appI
                                     <li key={p.id} className={`flex items-center gap-3 p-2 rounded-lg ${p.id === userId ? 'bg-blue-100' : 'bg-gray-100'}`}>
                                         <span className="font-bold text-lg text-purple-700 w-8">{p.score}</span>
                                         <span className="font-medium text-gray-700">{p.name}</span>
-                                        {p.roundStatus === 'won' && <span className="ml-auto text-green-500 font-bold">✓</span>}
-                                        {p.roundStatus === 'lost' && <span className="ml-auto text-red-500 font-bold">✗</span>}
+                                        <span className="ml-auto text-red-500 font-bold">{p.incorrectGuesses}/6</span>
                                     </li>
                                 ))}
                             </ul>
@@ -219,12 +287,17 @@ export default function GamePage({ navigateTo, gameId, userId, userProfile, appI
                                 {isAdmin && <button onClick={startGame} disabled={game.isPrivate && game.players.length < 1} className="bg-green-500 text-white font-bold py-3 px-8 rounded-lg text-xl shadow-lg transform hover:scale-105 transition-all disabled:bg-gray-400 disabled:cursor-not-allowed">{game.isPrivate && game.players.length < 1 ? 'Need 1+ Player' : 'Start Game!'}</button>}
                             </div>
                         )}
-                        {game.status === 'playing' && me && (
+                        {(game.status === 'playing' || game.status === 'ending') && me && (
                             <>
-                                {!isSinglePlayer && <div className="w-full text-center mb-4">
-                                    <div className="text-2xl font-bold text-red-600">{Math.ceil(timeLeft)}s</div>
-                                    <div className="w-full bg-gray-300 rounded-full h-2.5"><div className="bg-red-500 h-2.5 rounded-full" style={{ width: `${(timeLeft / 30) * 100}%` }}></div></div>
-                                </div>}
+                                <div className="w-full relative flex justify-center items-center" style={{ minHeight: '56px' }}>
+                                    {isSinglePlayer && (
+                                        <div className="absolute top-0 right-0 text-right">
+                                            <p className="text-lg font-semibold text-black">Current Streak: {singlePlayerStats.current}</p>
+                                            <p className="text-lg font-semibold text-black">Max Streak: {singlePlayerStats.max}</p>
+                                        </div>
+                                    )}
+                                    {hint && <div className="bg-yellow-300 text-yellow-800 px-4 py-2 rounded-lg shadow-lg font-bold text-center">{hint}</div>}
+                                </div>
                                 <HangmanCanvas incorrectGuesses={me.incorrectGuesses} isGameOver={isSinglePlayer ? game.status === 'finished' : me.roundStatus !== 'playing'} playerWon={isSinglePlayer ? game.playerResult === 'won' : me.roundStatus === 'won'} />
                                 <WordDisplay word={game.word} guesses={me.guesses} />
                                 {isSinglePlayer ? <Keyboard onGuess={handleGuess} guesses={me.guesses} /> : (me.roundStatus === 'playing' ? <Keyboard onGuess={handleGuess} guesses={me.guesses} /> : <div className="text-xl font-bold mt-4 h-12">{me.roundStatus === 'won' ? 'You got it!' : 'Better luck next round!'}</div>)}
@@ -232,9 +305,9 @@ export default function GamePage({ navigateTo, gameId, userId, userProfile, appI
                         )}
                          {game.status === 'finished' && isSinglePlayer && (
                             <div className="text-center flex flex-col items-center">
-                                <h2 className="text-4xl font-bold mt-4 mb-2 text-white">{game.playerResult === 'won' ? 'You Win!' : 'You Lose!'}</h2>
-                                <p className="text-xl text-gray-200 mb-4">The word was: <span className="font-bold text-white">{game.word}</span></p>
-                                <button onClick={startNewSinglePlayerGame} className="mt-6 bg-blue-500 text-white font-bold py-3 px-8 rounded-lg text-xl shadow-lg transform hover:scale-105 transition-all">New Game</button>
+                                <h2 className="text-4xl font-bold mt-4 mb-2 text-black">{game.playerResult === 'won' ? 'You Win!' : 'You Lose!'}</h2>
+                                <p className="text-xl text-gray==-200 mb-4">The word was: <span className="font-bold text-black">{game.word}</span></p>
+                                <button onClick={startNewSinglePlayerGame} className="mt-6 bg-blue-500 text-black font-bold py-3 px-8 rounded-lg text-xl shadow-lg transform hover:scale-105 transition-all">New Game</button>
                             </div>
                         )}
                         {game.status === 'finished' && !isSinglePlayer && (
