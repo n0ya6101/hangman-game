@@ -242,7 +242,7 @@ export default function GamePage({ navigateTo, gameId, userId, userProfile, appI
                 <source src="/videos/bg_vid.mp4" type="video/mp4" />
             </video>
             {notification && <div className="absolute top-5 right-5 bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg animate-bounce">{notification}</div>}
-            <button onClick={() => setShowExitModal(true)} className="absolute top-4 left-4 bg-white/70 hover:bg-white text-gray-700 p-3 rounded-full shadow-lg transition-all transform hover:scale-110"><HomeIcon /></button>
+            <button onClick={() => setShowExitModal(true)} className="absolute top-4 left-4 bg-white/70 hover:bg-white text-gray-700 p-3 rounded-full shadow-lg z-20 transition-all transform hover:scale-110"><HomeIcon /></button>
             {showExitModal && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
                     <div className="bg-white rounded-2xl p-8 shadow-2xl text-center max-w-sm mx-auto">
